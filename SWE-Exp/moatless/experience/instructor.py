@@ -60,20 +60,39 @@ class Instructor(BaseModel):
     @retry(
         stop=stop_after_attempt(5),
         wait=wait_fixed(3),
-        retry=retry_if_exception_type((KeyError, json.decoder.JSONDecodeError, json.JSONDecodeError, TypeError)),
+        retry=retry_if_exception_type((KeyError, json.decoder.JSONDecodeError, json.JSONDecodeError, TypeError, RuntimeError)),
         before_sleep=before_sleep_log(logger, logging.WARNING),  # 重试前打印日志
     )
     def _instruct_with_retry(self, input_messages, exp, node_id):
         # messages = self.message_generator.generate(node)
+        response = ""
         messages = input_messages.copy()
+        if len(messages) == 1 and messages[0].get("content", "").startswith("<task>"):
+            messages = []
         messages.insert(0, {"role": "system", "content": self.system_prompt})
         message = f'<task>\n{self.task}\n{exp}\nYou MUST do code modification and finish the task within max {str(self.taken_actions)} actions.\n</task>\n This is the {node_id}-th actions.'
+        history_text = "\n".join(str(m.get("content", "")) for m in input_messages)
+        if "raise NotImplementedError" in history_text and "Detailed Description" in self.task:
+            message += (
+                "\n\n<koce_instruction>\n"
+                "The target function stub and the full task specification have already been viewed. "
+                "Do not request more search or view actions unless a previous modification failed. "
+                "The next instruction must be a concrete code modification instruction with type \"modify\".\n"
+                "</koce_instruction>"
+            )
         messages.append({"role": "user", "content": message})
         messages.append({"role": "user", "content": self.output_format})
         try:
+            logger.info(
+                "Instructor request node=%s messages=%d chars=%d",
+                node_id,
+                len(messages),
+                sum(len(str(m.get("content", ""))) for m in messages),
+            )
             response = self._completion._litellm_base_completion(
                         messages=messages
                     ).choices[0].message.content
+            logger.info("Instructor raw response node=%s chars=%d", node_id, len(response or ""))
             response = self.simplify(response)
 
             def unescape_values(obj):
@@ -95,6 +114,20 @@ class Instructor(BaseModel):
             thoughts, instructions, context, ty = (cleaned_response['thoughts'], cleaned_response['instructions'],
                                                          cleaned_response['context'],
                                                          cleaned_response['type'])
+            history_text = "\n".join(str(m.get("content", "")) for m in input_messages)
+            if "raise NotImplementedError" in history_text and ty in {"search", "view"}:
+                ty = "modify"
+                target_match = re.search(r"Target location:\s*`([^`]+)`", self.task)
+                target_path = target_match.group(1).split(",")[0] if target_match else "the target file"
+                function_match = re.search(r"Target function:\s*`([^`]+)`", self.task)
+                function_name = function_match.group(1) if function_match else "the target function"
+                instructions = (
+                    f"Replace the `{function_name}` stub with a compact valid Python implementation. "
+                    "Use the task specification and helper functions already visible in the file. "
+                    "Keep the code ASCII only, omit long docstrings, and return only valid Python code in new_str. "
+                    f"The old_str is the current `{function_name}` definition with the TODO and raise NotImplementedError."
+                )
+                context = target_path
         except Exception as e:
             logger.error(f"Error in _instruct_with_retry: {str(e)}")
             logger.error(f"Response: {response}")

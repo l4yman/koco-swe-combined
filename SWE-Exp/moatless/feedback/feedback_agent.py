@@ -3,7 +3,7 @@ import os
 from datetime import datetime
 from typing import List, Dict, Optional, Any
 
-from litellm.types.llms.openai import ChatCompletionUserMessage
+from moatless.completion.messages import ChatCompletionUserMessage
 from pydantic import Field
 
 from moatless.actions.action import Action

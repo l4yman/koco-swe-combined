@@ -8,6 +8,9 @@ _voyageai = None
 def count_tokens(content: str, model: str = "gpt-3.5-turbo") -> int:
     global _enc, _voyageai
 
+    if os.environ.get("MOATLESS_FAST_TOKEN_COUNT", "1") != "0":
+        return max(1, len(str(content)) // 4)
+
     if model.startswith("voyage"):
         if _voyageai is None:
             voyageai_import_err = (

@@ -3,7 +3,6 @@ import json
 import logging
 from typing import List
 
-from litellm import token_counter
 from pydantic import Field, BaseModel, PrivateAttr
 from tqdm import tqdm
 
@@ -121,10 +120,8 @@ class MultiAgentDebate(BaseModel):
             debate_log["conclusion"] = "No conclusion available"
 
         # Calculate token usage
-        prompt_tokens = token_counter(text=str(debate_log["messages"]))
-        completion_tokens = token_counter(
-            text=str(conclusion_dict) if conclusion_dict else " "
-        )
+        prompt_tokens = len(str(debate_log["messages"]).split())
+        completion_tokens = len((str(conclusion_dict) if conclusion_dict else " ").split())
         total_tokens = prompt_tokens + completion_tokens
 
         node_id = str(len(self._debates) + 1)

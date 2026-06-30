@@ -5,14 +5,7 @@ from enum import Enum
 from textwrap import dedent
 from typing import Optional, Union, List, Any
 
-import litellm
 import tenacity
-from litellm.exceptions import (
-    BadRequestError,
-    NotFoundError,
-    AuthenticationError,
-    APIError,
-)
 from pydantic import BaseModel, Field, model_validator, ValidationError
 
 from moatless.completion.model import Completion, StructuredOutput
@@ -174,9 +167,7 @@ class CompletionModel(BaseModel):
         messages.insert(0, {"role": "system", "content": system_prompt})
 
         retries = tenacity.Retrying(
-            retry=tenacity.retry_if_not_exception_type(
-                (APIError, BadRequestError, NotFoundError, AuthenticationError, TypeError)
-            ),
+            retry=tenacity.retry_if_not_exception_type(TypeError),
             stop=tenacity.stop_after_attempt(4),
             wait=tenacity.wait_exponential(multiplier=4),
         )
@@ -273,6 +264,8 @@ class CompletionModel(BaseModel):
         Returns:
             The completion response from litellm
         """
+        import litellm
+
         litellm.drop_params = True
 
         @tenacity.retry(
@@ -348,9 +341,7 @@ class CompletionModel(BaseModel):
 
                 return ToolCallCompletionModel(**obj)
             elif response_format == LLMResponseFormat.REACT:
-                from moatless.completion.react import ReActCompletionModel
-
-                return ReActCompletionModel(**obj)
+                return cls(**obj)
 
         return cls(**obj)
 

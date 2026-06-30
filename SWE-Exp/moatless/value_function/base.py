@@ -2,7 +2,7 @@ import importlib
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
-from litellm.types.llms.openai import ChatCompletionUserMessage
+from moatless.completion.messages import ChatCompletionUserMessage
 from pydantic import BaseModel, Field
 
 from moatless.actions.action import Action, RewardScaleEntry
@@ -80,14 +80,11 @@ class ValueFunction(BaseModel):
         # Format the file context section
         if not node.parent.file_context.is_empty():
             last_message += "# File Context\n"
-            last_message += "The following code context was available when executing the action:\n\n"
+            last_message += "The following code context was available when executing the action. Full context is omitted; evaluate the action from the task, action, observation, and patch.\n\n"
             last_message += "<file_context>\n"
-            last_message += node.file_context.create_prompt(
-                show_span_ids=False,
-                show_line_numbers=True,
-                exclude_comments=False,
-                show_outcommented_code=True,
-                outcomment_code_comment="... rest of the code",
+            last_message += "\n".join(
+                f"* {context_file.file_path}: {', '.join(span.span_id for span in context_file.spans)}"
+                for context_file in node.file_context.files
             )
             last_message += "\n</file_context>\n\n"
 

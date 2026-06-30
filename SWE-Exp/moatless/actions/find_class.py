@@ -5,7 +5,6 @@ from pydantic import Field, model_validator
 
 from moatless.actions.model import ActionArguments, FewShotExample
 from moatless.actions.search_base import SearchBaseAction, SearchBaseArgs
-from moatless.index.types import SearchCodeResponse
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +56,7 @@ class FindClass(SearchBaseAction):
             prompt += f" in files matching the pattern: {self.args.file_pattern}"
         return prompt
 
-    def _search(self, args: FindClassArgs) -> SearchCodeResponse:
+    def _search(self, args: FindClassArgs):
         logger.info(
             f"{self.name}: {args.class_name} (file_pattern: {args.file_pattern})"
         )
@@ -65,18 +64,18 @@ class FindClass(SearchBaseAction):
             args.class_name, file_pattern=args.file_pattern
         )
 
-    def _select_span_instructions(self, search_result: SearchCodeResponse) -> str:
+    def _select_span_instructions(self, search_result) -> str:
         return (
             f"Here's the class structure."
             f"Use the function ViewCode and specify the SpanIDs of the relevant functions to view them.\n"
         )
 
-    def _search_for_alternative_suggestion(
-        self, args: FindClassArgs
-    ) -> SearchCodeResponse:
+    def _search_for_alternative_suggestion(self, args: FindClassArgs):
         if args.file_pattern:
             return self._code_index.find_class(args.class_name, file_pattern=None)
-        return SearchCodeResponse()
+        from moatless.benchmark.koco import LocalSearchCodeResponse
+
+        return LocalSearchCodeResponse()
 
     @classmethod
     def get_evaluation_criteria(cls, trajectory_length) -> List[str]:

@@ -1,7 +1,7 @@
 import logging
 from typing import Optional, Tuple
 
-from litellm.types.llms.openai import (
+from moatless.completion.messages import (
     ChatCompletionAssistantMessage,
     ChatCompletionUserMessage,
 )

@@ -1,6 +1,4 @@
-from typing import ClassVar, List
-
-from litellm import Type
+from typing import ClassVar, List, Type
 from pydantic import Field
 
 from moatless.actions.action import Action

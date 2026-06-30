@@ -2,7 +2,7 @@ import logging
 import os
 from typing import Any, Dict, Optional, List
 
-from litellm.types.llms.openai import ChatCompletionUserMessage
+from moatless.completion.messages import ChatCompletionUserMessage
 from pydantic import Field
 
 from moatless.completion.completion import CompletionModel

@@ -342,7 +342,7 @@ class RequestCodeChange(Action):
             args.pseudo_code,
         )
 
-        from litellm.types.llms.openai import ChatCompletionUserMessage
+        from moatless.completion.messages import ChatCompletionUserMessage
 
         messages.append(ChatCompletionUserMessage(role="user", content=user_message))
         response, completion = self._completion_model.create_text_completion(

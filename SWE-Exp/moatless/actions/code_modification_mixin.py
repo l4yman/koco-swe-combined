@@ -1,17 +1,19 @@
 import logging
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, TYPE_CHECKING
 
 from pydantic import PrivateAttr
 
 from moatless.actions.model import Observation
 from moatless.file_context import FileContext
-from moatless.index import CodeIndex
 from moatless.repository.repository import Repository
 from moatless.runtime.runtime import RuntimeEnvironment
 from moatless.utils.file import is_test
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from moatless.index.code_index import CodeIndex
 
 
 class CodeModificationMixin:
@@ -21,7 +23,7 @@ class CodeModificationMixin:
     """
 
     _runtime: RuntimeEnvironment | None = PrivateAttr(default=None)
-    _code_index: CodeIndex | None = PrivateAttr(default=None)
+    _code_index: Optional["CodeIndex"] = PrivateAttr(default=None)
     _repository: Repository | None = PrivateAttr(default=None)
 
     def normalize_path(self, file_path: str) -> str:

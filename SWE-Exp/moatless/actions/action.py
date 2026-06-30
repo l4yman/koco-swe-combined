@@ -2,7 +2,7 @@ import importlib
 import logging
 import pkgutil
 from abc import ABC
-from typing import List, Type, Tuple, Any, Dict, Optional, ClassVar
+from typing import List, Type, Tuple, Any, Dict, Optional, ClassVar, TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict
 
@@ -13,13 +13,15 @@ from moatless.actions.model import (
     FewShotExample,
 )
 from moatless.file_context import FileContext
-from moatless.index import CodeIndex
 from moatless.repository.repository import Repository
 from moatless.workspace import Workspace
 
 logger = logging.getLogger(__name__)
 
 _actions: Dict[str, Type["Action"]] = {}
+
+if TYPE_CHECKING:
+    from moatless.index.code_index import CodeIndex
 
 
 class Action(BaseModel, ABC):
@@ -230,7 +232,7 @@ At this stage, the agent is still working on the solution. Your task is twofold:
         obj: Any,
         repository: Repository = None,
         runtime: Any = None,
-        code_index: CodeIndex = None,
+        code_index: "CodeIndex" = None,
     ) -> "Action":
         if isinstance(obj, dict):
             obj = obj.copy()

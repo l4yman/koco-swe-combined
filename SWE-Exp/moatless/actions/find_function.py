@@ -5,7 +5,6 @@ from pydantic import Field, model_validator
 from moatless.actions.model import ActionArguments, FewShotExample
 from moatless.actions.search_base import SearchBaseAction, SearchBaseArgs, logger
 from moatless.codeblocks import CodeBlockType
-from moatless.index.types import SearchCodeResponse, SearchCodeHit, SpanHit
 
 
 class FindFunctionArgs(SearchBaseArgs):
@@ -58,7 +57,7 @@ class FindFunctionArgs(SearchBaseArgs):
 class FindFunction(SearchBaseAction):
     args_schema: ClassVar[Type[ActionArguments]] = FindFunctionArgs
 
-    def _search(self, args: FindFunctionArgs) -> SearchCodeResponse:
+    def _search(self, args: FindFunctionArgs):
         logger.info(
             f"{self.name}: {args.function_name} (class_name: {args.class_name}, file_pattern: {args.file_pattern})"
         )
@@ -68,9 +67,7 @@ class FindFunction(SearchBaseAction):
             file_pattern=args.file_pattern,
         )
 
-    def _search_for_alternative_suggestion(
-        self, args: FindFunctionArgs
-    ) -> SearchCodeResponse:
+    def _search_for_alternative_suggestion(self, args: FindFunctionArgs):
         """Return methods in the same class or other methods in same file with the method name the method in class is not found."""
 
         if args.class_name and args.file_pattern:
@@ -93,11 +90,17 @@ class FindFunction(SearchBaseAction):
                     span_ids.append(function_block.belongs_to_span.span_id)
 
             if span_ids:
-                return SearchCodeResponse(
+                from moatless.benchmark.koco import (
+                    LocalSearchCodeHit,
+                    LocalSearchCodeResponse,
+                    LocalSpanHit,
+                )
+
+                return LocalSearchCodeResponse(
                     hits=[
-                        SearchCodeHit(
+                        LocalSearchCodeHit(
                             file_path=args.file_pattern,
-                            spans=[SpanHit(span_id=span_id) for span_id in span_ids],
+                            spans=[LocalSpanHit(span_id=span_id) for span_id in span_ids],
                         )
                     ]
                 )
@@ -106,7 +109,9 @@ class FindFunction(SearchBaseAction):
                 args.class_name, file_pattern=args.file_pattern
             )
 
-        return SearchCodeResponse()
+        from moatless.benchmark.koco import LocalSearchCodeResponse
+
+        return LocalSearchCodeResponse()
 
     @classmethod
     def get_evaluation_criteria(cls, trajectory_length) -> List[str]:

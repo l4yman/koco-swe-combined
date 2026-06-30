@@ -1,10 +1,8 @@
 import logging
 from typing import List, Any
 
-from litellm.types.llms.openai import (
-    AllMessageValues,
+from moatless.completion.messages import (
     ChatCompletionAssistantMessage,
-    ChatCompletionToolMessage,
     ChatCompletionUserMessage,
 )
 from pydantic import BaseModel, Field, field_serializer
@@ -60,17 +58,93 @@ class MessageHistoryGenerator(BaseModel):
     ) -> str:
         return message_history_type.value
 
-    def generate(self, node: "Node") -> List[AllMessageValues]:  # type: ignore
+    def generate(self, node: "Node") -> List[dict]:  # type: ignore
         logger.debug(
             f"Generating message history for Node{node.node_id}: {self.message_history_type}"
         )
         generators = {
             MessageHistoryType.REACT: self._generate_react_history,
             MessageHistoryType.MESSAGES: self._generate_message_history,
+            MessageHistoryType.SUMMARY: self._generate_summary_history,
+            MessageHistoryType.MESSAGES_COMPACT: self._generate_summary_history,
         }
         start_idx = 0 if self.include_root_node else 1
         previous_nodes = node.get_trajectory()[start_idx:]
-        return generators[self.message_history_type](node, previous_nodes)
+        generator = generators.get(self.message_history_type)
+        if generator is None:
+            logger.warning(
+                "Unsupported message history type %s; using summary history",
+                self.message_history_type,
+            )
+            generator = self._generate_summary_history
+        return generator(node, previous_nodes)
+
+    def _shorten(self, text: str | None, max_chars: int = 2000) -> str:
+        if not text:
+            return ""
+        text = str(text)
+        if len(text) <= max_chars:
+            return text
+        return text[:max_chars] + "\n...[truncated]"
+
+    def _format_action_summary(self, previous_node: Node) -> str:
+        parts = [f"Node {previous_node.node_id}"]
+        if previous_node.instruct_message:
+            instruction = previous_node.instruct_message.get("instruction", "")
+            if instruction:
+                parts.append(f"Instruction: {self._shorten(instruction, 1200)}")
+
+        for step in previous_node.action_steps:
+            if not step.action:
+                continue
+            parts.append(f"Action: {step.action.name}")
+            try:
+                args = step.action.format_args_for_llm()
+            except Exception:
+                args = step.action.model_dump_json(exclude={"thoughts"})
+            if args:
+                parts.append(f"Action input: {self._shorten(args, 1600)}")
+            if step.observation:
+                observation = step.observation.summary or step.observation.message or ""
+                parts.append(f"Observation: {self._shorten(observation, 1800)}")
+
+        if previous_node.feedback_data:
+            parts.append(
+                f"Feedback: {self._shorten(previous_node.feedback_data.feedback, 1200)}"
+            )
+        if previous_node.error:
+            parts.append(f"Error: {self._shorten(previous_node.error, 1200)}")
+        return "\n".join(parts)
+
+    def _generate_summary_history(
+        self, node: Node, previous_nodes: List["Node"]
+    ) -> List[dict[str, Any]]:
+        entries = []
+        tokens = 0
+        for previous_node in previous_nodes:
+            if previous_node is node:
+                continue
+            if not (
+                previous_node.action_steps
+                or previous_node.instruct_message
+                or previous_node.feedback_data
+                or previous_node.error
+            ):
+                continue
+            entry = self._format_action_summary(previous_node)
+            entry_tokens = count_tokens(entry)
+            if entries and tokens + entry_tokens > self.max_tokens:
+                entries.append("...[older history omitted due to token limit]")
+                break
+            entries.append(entry)
+            tokens += entry_tokens
+
+        if not entries:
+            return []
+
+        content = "# Previous Action History\n\n" + "\n\n---\n\n".join(entries)
+        logger.info("Generated summary message history with %d tokens", tokens)
+        return [ChatCompletionUserMessage(role="user", content=content)]
 
     def _generate_message_history(
         self, node: Node, previous_nodes: List["Node"]
@@ -193,7 +267,7 @@ class MessageHistoryGenerator(BaseModel):
 
     def _generate_react_history(
         self, node: "Node", previous_nodes: List["Node"]
-    ) -> List[AllMessageValues]:
+    ) -> List[dict]:
         messages = [
             ChatCompletionUserMessage(role="user", content=f"<task>\n{node.get_root().message}\n</task>")
         ]
@@ -254,8 +328,10 @@ class MessageHistoryGenerator(BaseModel):
         if not previous_nodes:
             return []
 
-        # Calculate initial token count
-        total_tokens = node.file_context.context_size()
+        # Calculate initial token count. Avoid rendering the full file context
+        # before any action has actually used it; KOCO preloads the target file
+        # to permit StringReplace, and rendering it here can dominate runtime.
+        total_tokens = 0
         total_tokens += count_tokens(node.get_root().message)
 
         # Pre-calculate test output tokens if there's a patch
@@ -317,22 +393,8 @@ class MessageHistoryGenerator(BaseModel):
                         file_path = action_step.action.files[0].file_path
 
                         if file_path not in shown_files:
-                            context_file = previous_node.file_context.get_context_file(
-                                file_path
-                            )
-                            if context_file and (
-                                context_file.span_ids or context_file.show_all_spans
-                            ):
-                                shown_files.add(context_file.file_path)
-                                observation = context_file.to_prompt(
-                                    show_span_ids=False,
-                                    show_line_numbers=True,
-                                    exclude_comments=False,
-                                    show_outcommented_code=True,
-                                    outcomment_code_comment="... rest of the code",
-                                )
-                            else:
-                                observation = action_step.observation.message
+                            shown_files.add(file_path)
+                            observation = action_step.observation.message
                             current_messages.append((action_step.action, observation))
                     else:
                         # Count tokens for non-ViewCode actions
@@ -404,13 +466,8 @@ class MessageHistoryGenerator(BaseModel):
                                 continue
 
                             observations.append(
-                                context_file.to_prompt(
-                                    show_span_ids=False,
-                                    show_line_numbers=True,
-                                    exclude_comments=False,
-                                    show_outcommented_code=True,
-                                    outcomment_code_comment="... rest of the code",
-                                )
+                                f"{context_file.file_path}: "
+                                f"{', '.join(span.span_id for span in context_file.spans)}"
                             )
 
                         if code_spans:

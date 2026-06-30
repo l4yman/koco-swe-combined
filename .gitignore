@@ -4,3 +4,13 @@
 .trae/
 .combined-git/
 .source-git/
+SWE-Exp/.venv/
+SWE-Exp/.venv311/
+SWE-Exp/tmp/koco/full1/
+SWE-Exp/tmp/koco/full2/
+SWE-Exp/tmp/koco/workspaces/
+SWE-Exp/tmp/koco/usage/
+SWE-Exp/tmp/koco/inputs/
+SWE-Exp/tmp/koco/outputs/
+SWE-Exp/tmp/koco/smoke_stop_on_patch/
+SWE-Exp/tmp/koco/eval_handoff_full1/swe_exp_koco_full1_outputs.tgz

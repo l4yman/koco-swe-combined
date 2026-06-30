@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from typing import List
+from typing import List, Optional, TYPE_CHECKING
 
 from pydantic import Field
 
@@ -9,13 +9,15 @@ from moatless.actions.code_action_value_mixin import CodeActionValueMixin
 from moatless.actions.code_modification_mixin import CodeModificationMixin
 from moatless.actions.model import ActionArguments, Observation, FewShotExample
 from moatless.file_context import FileContext
-from moatless.index import CodeIndex
 from moatless.repository.file import do_diff
 from moatless.repository.repository import Repository
 from moatless.runtime.runtime import RuntimeEnvironment
 from moatless.workspace import Workspace
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from moatless.index.code_index import CodeIndex
 
 
 class CreateFileArgs(ActionArguments):
@@ -57,7 +59,7 @@ class CreateFile(Action, CodeActionValueMixin, CodeModificationMixin):
     def __init__(
         self,
         runtime: RuntimeEnvironment | None = None,
-        code_index: CodeIndex | None = None,
+        code_index: Optional["CodeIndex"] = None,
         repository: Repository | None = None,
         **data,
     ):

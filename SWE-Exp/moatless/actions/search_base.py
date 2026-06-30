@@ -1,8 +1,8 @@
 import logging
 from abc import ABC
-from typing import List, Optional, Type, Any, ClassVar, Tuple
+from typing import List, Optional, Type, Any, ClassVar, Tuple, TYPE_CHECKING
 
-from litellm.types.llms.openai import (
+from moatless.completion.messages import (
     ChatCompletionAssistantMessage,
     ChatCompletionUserMessage,
 )
@@ -14,12 +14,13 @@ from moatless.completion import CompletionModel
 from moatless.completion.model import Completion, StructuredOutput
 from moatless.exceptions import CompletionRejectError
 from moatless.file_context import FileContext
-from moatless.index import CodeIndex
-from moatless.index.types import SearchCodeResponse
 from moatless.repository.repository import Repository
 from moatless.workspace import Workspace
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from moatless.index.code_index import CodeIndex
 
 IDENTIFY_SYSTEM_PROMPT = """You are an autonomous AI assistant tasked with identifying relevant code in a codebase. Your goal is to select key code sections from the search results that are most relevant to the search request.
 
@@ -113,12 +114,12 @@ class SearchBaseAction(Action):
     )
 
     _repository: Repository = PrivateAttr()
-    _code_index: CodeIndex = PrivateAttr()
+    _code_index: "CodeIndex" = PrivateAttr()
 
     def __init__(
         self,
         repository: Repository = None,
-        code_index: CodeIndex | None = None,
+        code_index: Optional["CodeIndex"] = None,
         completion_model: CompletionModel = None,
         **data,
     ):
@@ -145,25 +146,27 @@ class SearchBaseAction(Action):
             properties["fail_reason"] = "no_search_hits"
             return Observation(message="No search results found", properties=properties)
 
-        properties["search_tokens"] = search_result_context.context_size()
-        properties["search_hits"] = search_result_context.model_dump(exclude_none=True)
+        properties["search_tokens"] = search_result_context.span_count() * 200
+        properties["search_hits"] = [
+            {"file_path": file.file_path, "spans": [span.model_dump() for span in file.spans]}
+            for file in search_result_context.files
+        ]
 
         completion = None
+        search_tokens = properties["search_tokens"]
 
         if (
             search_result_context.span_count() == 1
-            and search_result_context.context_size() > self.max_identify_tokens
+            and search_tokens > self.max_identify_tokens
         ):
-            logger.warning(
-                f"{self.name}: Conext for {search_result_context.create_summary()} is too large ({search_result_context.context_size()} tokens)."
-            )
+            logger.warning(f"{self.name}: Context is too large ({search_tokens} tokens).")
             properties["fail_reason"] = "search_too_large"
             return Observation(
                 message="Search too large. Found a single code section that is too large to view. Please refine the search query.",
                 properties=properties,
             )
         elif (
-            search_result_context.context_size() > self.max_search_tokens
+            search_tokens > self.max_search_tokens
             and search_result_context.span_count() > 1
         ) or search_result_context.span_count() > self.max_hits:
             logger.info(
@@ -176,13 +179,16 @@ class SearchBaseAction(Action):
         span_count = search_result_context.span_count()
         search_result_str = f"Found {span_count} code sections."
 
-        # Apply previous changes to view context
-        # TODO: Refactor
-        for file in file_context.files:
-            if view_context.has_file(file.file_path) and file.patch:
-                view_context.get_file(file.file_path).set_patch(file.patch)
-
-        new_span_ids = file_context.add_file_context(view_context)
+        new_span_ids = []
+        for context_file in view_context.files:
+            target_file = file_context.add_file(
+                context_file.file_path, show_all_spans=False, add_extra=False
+            )
+            existing_ids = {span.span_id for span in target_file.spans}
+            for span in context_file.spans:
+                if span.span_id not in existing_ids:
+                    target_file.spans.append(span)
+                    new_span_ids.append(span.span_id)
 
         if view_context.is_empty():
             search_result_str += (
@@ -193,18 +199,18 @@ class SearchBaseAction(Action):
         else:
             viewed_str = "that has already been viewed" if not new_span_ids else ""
 
+            summary_text = "\n".join(
+                f"* {file.file_path}: {', '.join(span.span_id for span in file.spans)}"
+                for file in view_context.files
+            )
             if alternative_suggestion:
-                summary = f"Did not find an exact match but found the following alternative suggestions {viewed_str}:\n{view_context.create_summary()}"
+                summary = f"Did not find an exact match but found the following alternative suggestions {viewed_str}:\n{summary_text}"
             else:
-                summary = f"Found the following relevant code spans {viewed_str}:\n{view_context.create_summary()}"
+                summary = f"Found the following relevant code spans {viewed_str}:\n{summary_text}"
 
             message = "Found the following relevant code:\n"
-            message += view_context.create_prompt(
-                show_span_ids=False,
-                show_line_numbers=True,
-                exclude_comments=False,
-                show_outcommented_code=True,
-            )
+            message += summary_text
+            message += "\nUse ViewCode with the listed file path and span ids to inspect the code."
 
         properties["new_span_ids"] = new_span_ids
 
@@ -234,19 +240,26 @@ class SearchBaseAction(Action):
         for hit in search_result.hits:
             span_count += len(hit.spans)
             for span in hit.spans:
-                search_result_context.add_span_to_context(
-                    hit.file_path, span.span_id, add_extra=True
-                )
+                start_line = getattr(span, "start_line", None)
+                end_line = getattr(span, "end_line", None)
+                if start_line:
+                    search_result_context.add_file_with_lines(
+                        hit.file_path, start_line, end_line
+                    )
+                else:
+                    search_result_context.add_span_to_context(
+                        hit.file_path, span.span_id, add_extra=True
+                    )
 
         return search_result_context, alternative_suggestion
 
-    def _select_span_instructions(self, search_result: SearchCodeResponse) -> str:
+    def _select_span_instructions(self, search_result) -> str:
         if not self.add_to_context:
             return f"Here's the search result with the first line of codes in each code block. Use ViewCode to view specific code sections. "
 
         return f"The search result is too large. You must identify the relevant code sections in the search results to use them. "
 
-    def _select_span_response_prompt(self, search_result: SearchCodeResponse) -> str:
+    def _select_span_response_prompt(self, search_result) -> str:
         search_result_context = FileContext(repo=self._repository)
         for hit in search_result.hits:
             for span in hit.spans:
@@ -267,13 +280,13 @@ class SearchBaseAction(Action):
         prompt += f"\n<search_results>\n{search_result_str}\n</search_result>\n"
         return prompt
 
-    def _search(self, args: SearchBaseArgs) -> SearchCodeResponse:
+    def _search(self, args: SearchBaseArgs):
         raise NotImplementedError("Subclasses must implement this method.")
 
-    def _search_for_alternative_suggestion(
-        self, args: SearchBaseArgs
-    ) -> SearchCodeResponse:
-        return SearchCodeResponse()
+    def _search_for_alternative_suggestion(self, args: SearchBaseArgs):
+        from moatless.benchmark.koco import LocalSearchCodeResponse
+
+        return LocalSearchCodeResponse()
 
     def _identify_code(
         self, args: SearchBaseArgs, search_result_ctx: FileContext

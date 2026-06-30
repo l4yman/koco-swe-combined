@@ -5,10 +5,17 @@ import logging
 from typing import Optional, Any, Union, Self, ClassVar
 
 from docstring_parser import parse
-from instructor.utils import classproperty
 from pydantic import BaseModel, model_validator, Field, ValidationError
 
 logger = logging.getLogger(__name__)
+
+
+class classproperty:
+    def __init__(self, func):
+        self.func = func
+
+    def __get__(self, obj, cls=None):
+        return self.func(cls)
 
 
 class Message(BaseModel):
@@ -397,10 +404,24 @@ class StructuredOutput(BaseModel):
             import re
             match = re.search(r"```(?:\w+)?\n?(.*?)```", json_data, re.DOTALL)
             if match:
-                logger.info("Match" + match.group(1).strip())
-                json_data = match.group(1).strip()
+                fenced = match.group(1).strip()
+                if fenced.startswith("{") or fenced.startswith("["):
+                    logger.info("Match" + fenced)
+                    json_data = fenced
 
             parsed_data = json_repair.loads(json_data)
+            if isinstance(parsed_data, list):
+                parsed_data = next((item for item in parsed_data if isinstance(item, dict)), {})
+            if (
+                isinstance(parsed_data, dict)
+                and "action" in parsed_data
+                and isinstance(parsed_data["action"], dict)
+                and not parsed_data.get("action_type")
+            ):
+                action_data = parsed_data["action"]
+                if parsed_data.get("thoughts") and not action_data.get("thoughts"):
+                    action_data["thoughts"] = parsed_data["thoughts"]
+                parsed_data = action_data
             if parsed_data.get('action_type'):
                 if parsed_data['action_type'].endswith("Args"):
                     parsed_data['action_type'] = parsed_data['action_type'][:-len("Args")]

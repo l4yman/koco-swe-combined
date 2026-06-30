@@ -3,7 +3,7 @@ import json_repair
 import logging
 import os
 from datetime import datetime
-from typing import Optional, Dict, Any, List, Callable, Union
+from typing import Optional, Dict, Any, List, Callable, Union, TYPE_CHECKING
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -18,7 +18,6 @@ from moatless.feedback import FeedbackGenerator
 from moatless.feedback.feedback_agent import FeedbackAgent
 from moatless.feedback.reward_feedback import RewardFeedbackGenerator
 from moatless.file_context import FileContext
-from moatless.index.code_index import CodeIndex
 from moatless.node import Node, generate_ascii_tree, FeedbackData
 from moatless.repository.repository import Repository
 from moatless.runtime.runtime import RuntimeEnvironment
@@ -30,6 +29,9 @@ from moatless.experience.instructor import Instructor
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+if TYPE_CHECKING:
+    from moatless.index.code_index import CodeIndex
 
 
 class SearchTree(BaseModel):
@@ -213,7 +215,7 @@ class SearchTree(BaseModel):
         data: Dict[str, Any],
         persist_path: str | None = None,
         repository: Repository | None = None,
-        code_index: CodeIndex | None = None,
+        code_index: Optional["CodeIndex"] = None,
         runtime: RuntimeEnvironment | None = None,
     ) -> "SearchTree":
         data = data.copy()
@@ -387,7 +389,9 @@ class SearchTree(BaseModel):
         else:
             previous_nodes = node.get_trajectory()
             # logger.info(f"previous_nodes: {previous_nodes}")
+            logger.info(f"Node{node.node_id}: calling assistant.run")
             self.assistant.run(node, exp, experiencer, self.instructor)
+            logger.info(f"Node{node.node_id}: assistant.run returned")
 
         if self.value_function and not node.is_duplicate and node.observation:
             try:
@@ -436,6 +440,18 @@ class SearchTree(BaseModel):
                     f"Node{node.node_id}: Value function runtime error: {e.message}",
                 )
                 raise  # Re-raise to abort the entire search
+
+        if self.metadata.get("koco_stop_on_patch") and node.observation:
+            try:
+                has_patch = bool(node.file_context and node.file_context.generate_git_patch())
+            except Exception:
+                has_patch = False
+            if has_patch and not node.observation.expect_correction:
+                node.terminal = True
+                self.log(
+                    logger.info,
+                    f"Node{node.node_id}: KOCO target patch produced; marking node terminal.",
+                )
 
     def _backpropagate(self, node: Node):
         """Backpropagate the reward up the tree."""
@@ -500,6 +516,10 @@ class SearchTree(BaseModel):
             return True
 
         finished_nodes = self.get_finished_nodes()
+        if self.metadata.get("koco_stop_on_patch") and finished_nodes:
+            logger.info("Search finished: KOCO target patch produced")
+            return True
+
         unique_finished_parents = set()
         for node in finished_nodes:
             unique_finished_parents.add(node.parent.node_id)
@@ -542,7 +562,13 @@ class SearchTree(BaseModel):
         finished_nodes = []
         for node in self.root.get_all_nodes():
             # TODO: Pick finished node with highest/avg/lowest reward?
-            if node.is_finished() and node.parent.node_id not in parent_ids:
+            is_finished = node.is_finished()
+            if self.metadata.get("koco_stop_on_patch") and node.terminal:
+                try:
+                    is_finished = bool(node.file_context and node.file_context.generate_git_patch())
+                except Exception:
+                    is_finished = False
+            if is_finished and node.parent and node.parent.node_id not in parent_ids:
                 parent_ids.add(node.parent.node_id)
                 finished_nodes.append(node)
 
@@ -756,7 +782,7 @@ class SearchTree(BaseModel):
         data: Dict[str, Any],
         persist_path: str | None = None,
         repository: Repository | None = None,
-        code_index: CodeIndex | None = None,
+        code_index: Optional["CodeIndex"] = None,
         runtime: RuntimeEnvironment | None = None,
     ) -> "SearchTree":
         data = data.copy()
