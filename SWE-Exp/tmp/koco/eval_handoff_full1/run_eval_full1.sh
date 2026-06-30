@@ -2,10 +2,10 @@
 set -euo pipefail
 
 LABEL="ali-deepseek-v3.2_51c3eaf2_all_full1_iter100_c5"
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SWE_EXP_DIR="$ROOT_DIR"
+HANDOFF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SWE_EXP_DIR="$(cd "$HANDOFF_DIR/../../.." && pwd)"
 KOCO_DIR="$SWE_EXP_DIR/../KOCO-bench/KOCO-bench-en/domain_code_generation"
-HANDOFF_DIR="$SWE_EXP_DIR/tmp/koco/eval_handoff_full1"
+PYTHON_BIN="${PYTHON_BIN:-python}"
 
 frameworks=(
   "open-r1"
@@ -31,7 +31,7 @@ export KOCO_SWE_EXP_OUTPUT_ROOT="$KOCO_DIR/scripts/data"
 cd "$SWE_EXP_DIR"
 for framework in "${frameworks[@]}"; do
   echo "=== Evaluating $framework ==="
-  .venv311/bin/python workflow_koco.py eval \
+  "$PYTHON_BIN" workflow_koco.py eval \
     --framework "$framework" \
     --model ali-deepseek-v3.2 \
     --output-label "$LABEL"
