@@ -152,14 +152,9 @@ class ViewCode(Action, IdentifyMixin):
 
         view_context = FileContext(repo=self._repository)
         completion = None
-        direct_snippets = []
 
         for file_path, file_span in grouped_files.items():
             file = file_context.get_file(file_path)
-            if any(span_id in {"full_file", "whole_file", "*"} for span_id in file_span.span_ids):
-                file_span.span_ids = []
-                file_span.start_line = None
-                file_span.end_line = None
 
             if file_span.span_ids:
                 missing_span_ids = set()
@@ -209,60 +204,24 @@ class ViewCode(Action, IdentifyMixin):
                         )
 
             if file_span.start_line:
-                view_context.add_file(file_path, show_all_spans=True, add_extra=False)
-                content = self._repository.get_file_content(file_path) or ""
-                lines = content.splitlines()
-                start_line = max(1, file_span.start_line)
-                end_line = min(len(lines), file_span.end_line or (start_line + 219))
-                snippet = "\n".join(
-                    f"{line_no:6}\t{lines[line_no - 1]}"
-                    for line_no in range(start_line, end_line + 1)
+                view_context.add_line_span_to_context(
+                    file_path, file_span.start_line, file_span.end_line, add_extra=False
                 )
-                direct_snippets.append(f"{file_path}:{start_line}-{end_line}\n```\n{snippet}\n```")
 
             if not file_span.start_line and not file_span.span_ids:
-                content = self._repository.get_file_content(file_path) or ""
-                lines = content.splitlines()
-                end_line = min(len(lines), 220)
-                view_context.add_file(file_path, show_all_spans=False, add_extra=False)
-                context_file = view_context.get_context_file(file_path)
-                if context_file:
-                    from moatless.file_context import ContextSpan
-
-                    context_file.spans.append(
-                        ContextSpan(
-                            span_id=f"lines_1_{end_line}",
-                            start_line=1,
-                            end_line=end_line,
-                        )
-                    )
-                snippet = "\n".join(
-                    f"{line_no:6}\t{lines[line_no - 1]}"
-                    for line_no in range(1, end_line + 1)
-                )
-                suffix = "" if end_line == len(lines) else f"\n... truncated at line {end_line} of {len(lines)}"
-                direct_snippets.append(f"{file_path}:1-{end_line}\n```\n{snippet}{suffix}\n```")
+                view_context.add_file(file_path, show_all_spans=True)
 
             if file.patch:
                 view_file = view_context.get_file(file_path)
                 if view_file:
                     view_file.set_patch(file.patch)
 
-            if not direct_snippets and view_context.context_size() > self.max_tokens:
+            if view_context.context_size() > self.max_tokens:
                 view_context, completion = self._identify_code(
                     args, view_context, self.max_tokens
                 )
 
-            new_span_ids = []
-            for context_file in view_context.files:
-                target_file = file_context.add_file(
-                    context_file.file_path, show_all_spans=False, add_extra=False
-                )
-                existing_ids = {span.span_id for span in target_file.spans}
-                for span in context_file.spans:
-                    if span.span_id not in existing_ids:
-                        target_file.spans.append(span)
-                        new_span_ids.append(span.span_id)
+            new_span_ids = file_context.add_file_context(view_context)
             properties["files"][file_path] = {
                 "new_span_ids": list(new_span_ids),
             }
@@ -271,32 +230,19 @@ class ViewCode(Action, IdentifyMixin):
             len(file["new_span_ids"]) > 0 for file in properties["files"].values()
         )
 
-        if direct_snippets:
-            message = "Here's the requested code:\n" + "\n\n".join(direct_snippets)
-            summary = "Showed requested code lines."
-            return Observation(
-                message=message,
-                summary=summary,
-                properties=properties,
-                execution_completion=completion,
-            )
-
         if view_context.is_empty():
             message = f"\nThe specified code spans wasn't found."
             properties["fail_reason"] = "no_spans_found"
             summary = "The specified code spans wasn't found."
         else:
             message = "Here's the contents of the file where the not requested code spans have been commented out:\n"
-            if direct_snippets:
-                message += "\n\n".join(direct_snippets)
-            else:
-                message += view_context.create_prompt(
-                    show_span_ids=False,
-                    show_line_numbers=True,
-                    exclude_comments=False,
-                    show_outcommented_code=True,
-                    outcomment_code_comment="Rest of the code...",
-                )
+            message += view_context.create_prompt(
+                show_span_ids=False,
+                show_line_numbers=True,
+                exclude_comments=False,
+                show_outcommented_code=True,
+                outcomment_code_comment="Rest of the code...",
+            )
 
             if added_new_spans:
                 summary = (

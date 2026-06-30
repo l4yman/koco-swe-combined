@@ -389,9 +389,7 @@ class SearchTree(BaseModel):
         else:
             previous_nodes = node.get_trajectory()
             # logger.info(f"previous_nodes: {previous_nodes}")
-            logger.info(f"Node{node.node_id}: calling assistant.run")
             self.assistant.run(node, exp, experiencer, self.instructor)
-            logger.info(f"Node{node.node_id}: assistant.run returned")
 
         if self.value_function and not node.is_duplicate and node.observation:
             try:
@@ -440,18 +438,6 @@ class SearchTree(BaseModel):
                     f"Node{node.node_id}: Value function runtime error: {e.message}",
                 )
                 raise  # Re-raise to abort the entire search
-
-        if self.metadata.get("koco_stop_on_patch") and node.observation:
-            try:
-                has_patch = bool(node.file_context and node.file_context.generate_git_patch())
-            except Exception:
-                has_patch = False
-            if has_patch and not node.observation.expect_correction:
-                node.terminal = True
-                self.log(
-                    logger.info,
-                    f"Node{node.node_id}: KOCO target patch produced; marking node terminal.",
-                )
 
     def _backpropagate(self, node: Node):
         """Backpropagate the reward up the tree."""
@@ -516,10 +502,6 @@ class SearchTree(BaseModel):
             return True
 
         finished_nodes = self.get_finished_nodes()
-        if self.metadata.get("koco_stop_on_patch") and finished_nodes:
-            logger.info("Search finished: KOCO target patch produced")
-            return True
-
         unique_finished_parents = set()
         for node in finished_nodes:
             unique_finished_parents.add(node.parent.node_id)
@@ -562,13 +544,7 @@ class SearchTree(BaseModel):
         finished_nodes = []
         for node in self.root.get_all_nodes():
             # TODO: Pick finished node with highest/avg/lowest reward?
-            is_finished = node.is_finished()
-            if self.metadata.get("koco_stop_on_patch") and node.terminal:
-                try:
-                    is_finished = bool(node.file_context and node.file_context.generate_git_patch())
-                except Exception:
-                    is_finished = False
-            if is_finished and node.parent and node.parent.node_id not in parent_ids:
+            if node.is_finished() and node.parent.node_id not in parent_ids:
                 parent_ids.add(node.parent.node_id)
                 finished_nodes.append(node)
 

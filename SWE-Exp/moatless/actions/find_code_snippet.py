@@ -84,18 +84,9 @@ class FindCodeSnippet(SearchBaseAction):
             num_lines = len(args.code_snippet.splitlines())
             end_line = start_line + num_lines - 1
 
-            search_result_context.add_file(file_path, show_all_spans=True, add_extra=False)
-            context_file = search_result_context.get_context_file(file_path)
-            if context_file:
-                context_file.spans.append(
-                    __import__(
-                        "moatless.file_context", fromlist=["ContextSpan"]
-                    ).ContextSpan(
-                        span_id=f"lines_{start_line}_{end_line}",
-                        start_line=start_line,
-                        end_line=end_line,
-                    )
-                )
+            search_result_context.add_line_span_to_context(
+                file_path, start_line, end_line, add_extra=False
+            )
 
         return search_result_context, False
 

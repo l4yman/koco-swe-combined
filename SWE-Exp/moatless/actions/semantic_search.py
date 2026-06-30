@@ -4,6 +4,7 @@ from pydantic import Field, model_validator
 
 from moatless.actions.model import ActionArguments, FewShotExample
 from moatless.actions.search_base import SearchBaseAction, SearchBaseArgs
+from moatless.index.types import SearchCodeResponse
 
 
 class SemanticSearchArgs(SearchBaseArgs):
@@ -55,7 +56,7 @@ class SemanticSearchArgs(SearchBaseArgs):
 class SemanticSearch(SearchBaseAction):
     args_schema: ClassVar[Type[ActionArguments]] = SemanticSearchArgs
 
-    def _search(self, args: SemanticSearchArgs):
+    def _search(self, args: SemanticSearchArgs) -> SearchCodeResponse:
         return self._code_index.semantic_search(
             args.query,
             file_pattern=args.file_pattern,
@@ -63,7 +64,9 @@ class SemanticSearch(SearchBaseAction):
             category=args.category,
         )
 
-    def _search_for_alternative_suggestion(self, args: SemanticSearchArgs):
+    def _search_for_alternative_suggestion(
+        self, args: SemanticSearchArgs
+    ) -> SearchCodeResponse:
         if args.file_pattern:
             return self._code_index.semantic_search(
                 args.query,
@@ -71,9 +74,7 @@ class SemanticSearch(SearchBaseAction):
                 category=args.category,
             )
 
-        from moatless.benchmark.koco import LocalSearchCodeResponse
-
-        return LocalSearchCodeResponse()
+        return SearchCodeResponse()
 
     @classmethod
     def get_evaluation_criteria(cls, trajectory_length: int | None = None) -> List[str]:

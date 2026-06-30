@@ -328,10 +328,8 @@ class MessageHistoryGenerator(BaseModel):
         if not previous_nodes:
             return []
 
-        # Calculate initial token count. Avoid rendering the full file context
-        # before any action has actually used it; KOCO preloads the target file
-        # to permit StringReplace, and rendering it here can dominate runtime.
-        total_tokens = 0
+        # Calculate initial token count
+        total_tokens = node.file_context.context_size()
         total_tokens += count_tokens(node.get_root().message)
 
         # Pre-calculate test output tokens if there's a patch
@@ -393,8 +391,22 @@ class MessageHistoryGenerator(BaseModel):
                         file_path = action_step.action.files[0].file_path
 
                         if file_path not in shown_files:
-                            shown_files.add(file_path)
-                            observation = action_step.observation.message
+                            context_file = previous_node.file_context.get_context_file(
+                                file_path
+                            )
+                            if context_file and (
+                                context_file.span_ids or context_file.show_all_spans
+                            ):
+                                shown_files.add(context_file.file_path)
+                                observation = context_file.to_prompt(
+                                    show_span_ids=False,
+                                    show_line_numbers=True,
+                                    exclude_comments=False,
+                                    show_outcommented_code=True,
+                                    outcomment_code_comment="... rest of the code",
+                                )
+                            else:
+                                observation = action_step.observation.message
                             current_messages.append((action_step.action, observation))
                     else:
                         # Count tokens for non-ViewCode actions
@@ -466,8 +478,13 @@ class MessageHistoryGenerator(BaseModel):
                                 continue
 
                             observations.append(
-                                f"{context_file.file_path}: "
-                                f"{', '.join(span.span_id for span in context_file.spans)}"
+                                context_file.to_prompt(
+                                    show_span_ids=False,
+                                    show_line_numbers=True,
+                                    exclude_comments=False,
+                                    show_outcommented_code=True,
+                                    outcomment_code_comment="... rest of the code",
+                                )
                             )
 
                         if code_spans:

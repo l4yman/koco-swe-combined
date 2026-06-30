@@ -1,6 +1,5 @@
 import logging
 import re
-import ast
 from typing import List, Optional, TYPE_CHECKING
 
 from pydantic import Field, model_validator
@@ -256,68 +255,10 @@ class StringReplace(Action, CodeActionValueMixin, CodeModificationMixin):
             return Observation(
                 message=f"The old_str and new_str are the same. No changes were made.",
                 properties={"fail_reason": "no_changes"},
-                expect_correction=True,
             )
-
-        if "\u2020" in new_str or len(new_str.splitlines()) < 3:
-            return Observation(
-                message="No changes were made. The replacement code appears truncated or corrupted; provide a complete Python function.",
-                properties={"fail_reason": "invalid_replacement"},
-                expect_correction=True,
-            )
-
-        # AIDP occasionally substitutes zeros in code strings with Roman
-        # numeral-looking text. Normalize only common numeric contexts and keep
-        # the AST validation below as the final guard.
-        new_str = (
-            new_str.replace("III.", "0.")
-            .replace(" II", " 0")
-            .replace("(II", "(0")
-            .replace(", II", ", 0")
-            .replace(": II", ": 0")
-            .replace("=II", "=0")
-            .replace("= II", "= 0")
-            .replace("> II", "> 0")
-            .replace("< II", "< 0")
-            .replace("non‑empty", "non-empty")
-        )
-        args.new_str = new_str
 
         # Use find_exact_matches instead of inline code
         exact_matches = find_exact_matches(old_str, file_content)
-        if not exact_matches and new_str.lstrip().startswith("def "):
-            try:
-                tree = ast.parse(file_content)
-                try:
-                    new_tree = ast.parse(new_str)
-                    new_func_name = next(
-                        (
-                            node.name
-                            for node in ast.walk(new_tree)
-                            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                        ),
-                        None,
-                    )
-                except SyntaxError:
-                    match = re.search(r"^\s*(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)", new_str)
-                    new_func_name = match.group(1) if match else None
-                if new_func_name is not None:
-                    lines = file_content.splitlines()
-                    for node in ast.walk(tree):
-                        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == new_func_name:
-                            inferred_old = "\n".join(lines[node.lineno - 1 : node.end_lineno])
-                            inferred_matches = find_exact_matches(inferred_old, file_content)
-                            if inferred_matches:
-                                logger.info(
-                                    "Inferred old_str for function %s from current file",
-                                    new_func_name,
-                                )
-                                old_str = inferred_old
-                                args.old_str = inferred_old
-                                exact_matches = inferred_matches
-                            break
-            except SyntaxError:
-                pass
 
         logger.info(f"Found {len(exact_matches)} exact matches")
 
@@ -495,15 +436,6 @@ class StringReplace(Action, CodeActionValueMixin, CodeModificationMixin):
             )
         else:
             new_file_content = file_content.replace(args.old_str, args.new_str)
-
-        try:
-            ast.parse(new_file_content)
-        except SyntaxError as exc:
-            return Observation(
-                message=f"No changes were made. The replacement would make the file invalid Python: {exc}",
-                properties={"fail_reason": "invalid_syntax"},
-                expect_correction=True,
-            )
 
         # Generate diff and apply changes
         diff = do_diff(str(path), file_content, new_file_content)

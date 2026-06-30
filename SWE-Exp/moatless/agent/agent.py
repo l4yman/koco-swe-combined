@@ -103,14 +103,10 @@ class ActionAgent(BaseModel):
             node.reset()
 
         node.possible_actions = [action.name for action in self.actions]
-        logger.info(f"Node{node.node_id}: generating system prompt")
         system_prompt = self.generate_system_prompt()
-        logger.info(f"Node{node.node_id}: generated system prompt chars={len(system_prompt)}")
         action_args = [action.args_schema for action in self.actions]
 
-        logger.info(f"Node{node.node_id}: generating message history")
         messages = self.message_generator.generate(node)
-        logger.info(f"Node{node.node_id}: generated message history count={len(messages)}")
         if experiencer:
             het = experiencer.get_json(experiencer.persist_dir)
             persist_exp = {}
@@ -133,9 +129,7 @@ class ActionAgent(BaseModel):
         
         logger.info(f"Node{node.node_id}: Build action with {len(messages)} messages")
         try:
-            logger.info(f"Node{node.node_id}: calling instructor.instruct")
             reason, instruction, context, ty = instructor.instruct(messages, exp + new_experiences, node.node_id)
-            logger.info(f"Node{node.node_id}: instructor returned type={ty}")
             node.instruct_message = {'reasoning': reason, 'instruction': instruction, 'context': str(context), 'ty': ty}
 
             if ty == 'search':
@@ -170,23 +164,7 @@ class ActionAgent(BaseModel):
                     if m['role'] == 'user' and m['content'] != 'No search results found':
                         if m['content'].startswith("Observation: "):
                             code += f'{m["content"]}\n'
-                target_path_match = __import__("re").search(r"Target location:\s*`([^`]+)`", instructor.task)
-                target_path = target_path_match.group(1).split(",")[0] if target_path_match else "the target file"
-                target_function_match = __import__("re").search(r"Target function:\s*`([^`]+)`", instructor.task)
-                target_function = target_function_match.group(1) if target_function_match else "the target function"
                 instruction_input += f'\n\n<code>\n{code}\n</code>'
-                instruction_input += (
-                    "\n\n<action_constraint>\n"
-                    "You MUST return a valid StringReplace action only. "
-                    "Do not return FindFunction, FindCodeSnippet, ViewCode, or a nested action object. "
-                    "The JSON object must have top-level keys: thoughts, path, old_str, new_str. "
-                    f"path must be {target_path}. "
-                    f"old_str must be the exact `{target_function}` stub currently shown. "
-                    f"new_str must be the complete replacement Python function for `{target_function}`, not the same as old_str. "
-                    "Keep new_str compact: no long docstring, ASCII only, no nested JSON, no markdown, no explanatory prose. "
-                    "All dictionary values must be valid Python literals.\n"
-                    "</action_constraint>"
-                )
             elif ty in ['search', 'view']:
                 history = ''
                 for index,i in enumerate(messages):
@@ -211,11 +189,9 @@ class ActionAgent(BaseModel):
 
             instruct_message = [{'role': 'user',  'content': instruction_input}]
 
-            logger.info(f"Node{node.node_id}: calling completion for action type={ty}")
             completion_response = self._completion.create_completion(
                 instruct_message, system_prompt=system_prompt, response_model=action_args
             )
-            logger.info(f"Node{node.node_id}: completion returned {len(completion_response.structured_outputs)} structured outputs")
 
             if completion_response.structured_outputs:
                 node.action_steps = [

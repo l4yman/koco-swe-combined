@@ -10,7 +10,6 @@ import subprocess
 import sys
 import threading
 from fnmatch import fnmatch
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 
@@ -544,34 +543,6 @@ def run_koco_eval(framework: str, model_label: str, test_example: str | None = N
     return 1 if failures else 0
 
 
-@dataclass
-class LocalSpanHit:
-    span_id: str
-    rank: int = 0
-    tokens: int = 0
-    start_line: int | None = None
-    end_line: int | None = None
-
-
-@dataclass
-class LocalSearchCodeHit:
-    file_path: str
-    spans: list[LocalSpanHit] = field(default_factory=list)
-
-    @property
-    def span_ids(self):
-        return [span.span_id for span in self.spans]
-
-
-@dataclass
-class LocalSearchCodeResponse:
-    hits: list[LocalSearchCodeHit] = field(default_factory=list)
-    message: str | None = None
-
-    def sum_tokens(self):
-        return sum(sum(span.tokens for span in hit.spans) for hit in self.hits)
-
-
 class KocoCodeIndex:
     """Local KOCO code index compatible with SWE-Exp search actions.
 
@@ -638,19 +609,19 @@ class KocoCodeIndex:
         return fnmatch(file_path, pattern) or fnmatch(file_path, f"**/{pattern}")
 
     def _response(self, entries: list[tuple[str, str, int, int]]) :
-        by_file: dict[str, LocalSearchCodeHit] = {}
+        from moatless.index.types import SearchCodeHit, SearchCodeResponse, SpanHit
+
+        by_file: dict[str, SearchCodeHit] = {}
         for rank, (file_path, span_id, start_line, end_line) in enumerate(entries[: self.max_results]):
-            hit = by_file.setdefault(file_path, LocalSearchCodeHit(file_path=file_path))
+            hit = by_file.setdefault(file_path, SearchCodeHit(file_path=file_path))
             hit.spans.append(
-                LocalSpanHit(
+                SpanHit(
                     span_id=span_id,
                     rank=rank,
                     tokens=0,
-                    start_line=start_line,
-                    end_line=end_line,
                 )
             )
-        return LocalSearchCodeResponse(hits=list(by_file.values()))
+        return SearchCodeResponse(hits=list(by_file.values()))
 
     def find_function(self, function_name: str, class_name: str | None = None, file_pattern: str | None = None):
         entries = []

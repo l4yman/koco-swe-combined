@@ -107,9 +107,12 @@ class CodeParser:
         self._enable_code_graph = enable_code_graph
         self._graph = None
 
-        from llama_index.core import get_tokenizer
+        if tokenizer:
+            self.tokenizer = tokenizer
+        else:
+            from moatless.utils.tokenizer import count_tokens
 
-        self.tokenizer = tokenizer or get_tokenizer()
+            self.tokenizer = lambda content: [None] * count_tokens(content)
         self._max_tokens_in_span = max_tokens_in_span
         self._min_tokens_for_docs_span = min_tokens_for_docs_span
         self._min_lines_to_parse_block = min_lines_to_parse_block

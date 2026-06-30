@@ -14,7 +14,6 @@ from pathlib import Path
 from moatless.benchmark.koco import (
     KocoCodeIndex,
     KocoExperienceSelector,
-    append_koco_experience,
     build_koco_experience_from_eval,
     create_koco_repository,
     extract_completion_from_file_context,
@@ -27,7 +26,6 @@ from moatless.benchmark.koco import (
 )
 from moatless.completion.aidp import AIDPCompletionModel
 from moatless.completion.completion import CompletionModel, LLMResponseFormat
-from moatless.file_context import ContextSpan
 
 
 logging.basicConfig(level=logging.INFO)
@@ -99,7 +97,7 @@ def build_actions(completion_model, repository, code_index):
         [
             ViewCode(completion_model=completion_model, repository=repository),
             StringReplace(repository=repository, code_index=code_index),
-            Finish(enforce_patch=True),
+            Finish(),
         ]
     )
     return actions
@@ -139,84 +137,6 @@ def validate_patch_scope(instance: dict, patch: str) -> tuple[bool, str]:
                     f"window {target_start}-{target_end}"
                 )
     return True, ""
-
-
-def _node_rank(node) -> tuple:
-    reward = 0.0
-    try:
-        if node.reward and node.reward.value is not None:
-            reward = float(node.reward.value)
-    except (TypeError, ValueError):
-        reward = 0.0
-    observation = getattr(node, "observation", None)
-    expect_correction = bool(getattr(observation, "expect_correction", False))
-    has_patch = False
-    try:
-        has_patch = bool(_get_node_patch(node))
-    except Exception:
-        has_patch = False
-    return (
-        bool(node.is_finished()),
-        has_patch,
-        not expect_correction,
-        bool(node.reward),
-        reward,
-        node.get_depth(),
-        node.node_id,
-    )
-
-
-def _get_node_patch(node) -> str:
-    if not getattr(node, "file_context", None):
-        return ""
-    patch = ""
-    try:
-        patch = node.file_context.generate_git_patch()
-    except Exception:
-        patch = ""
-    if patch:
-        return patch
-
-    # Persisted trajectories may contain only per-file patches without the
-    # repository content needed to regenerate a diff.
-    files = getattr(node.file_context, "_files", {}) or {}
-    return "\n".join(
-        file.patch for file in files.values() if getattr(file, "patch", None)
-    )
-
-
-def extract_valid_koco_node(search_tree, instance: dict, preferred_node=None) -> tuple[object | None, str, str, str]:
-    candidates = []
-    if preferred_node is not None:
-        candidates.append(preferred_node)
-    candidates.extend(search_tree.get_finished_nodes())
-    candidates.extend(search_tree.get_leaf_nodes())
-    candidates.extend(search_tree.root.get_all_nodes())
-
-    unique = {}
-    for node in candidates:
-        if node is not None:
-            unique[node.node_id] = node
-
-    last_error = ""
-    for node in sorted(unique.values(), key=_node_rank, reverse=True):
-        if not getattr(node, "file_context", None):
-            continue
-        patch = _get_node_patch(node)
-        ok, scope_error = validate_patch_scope(instance, patch)
-        if not ok:
-            last_error = scope_error
-            continue
-        try:
-            completion = extract_completion_from_file_context(node.file_context, instance)
-        except Exception as exc:
-            last_error = f"failed to extract completion from node {node.node_id}: {exc}"
-            continue
-        if completion:
-            return node, patch, completion, ""
-        last_error = f"node {node.node_id} has valid patch but no extractable completion"
-
-    return None, "", "", last_error or "no valid patched node found"
 
 
 def run_single_koco_instance(args, instance: dict) -> dict:
@@ -283,24 +203,12 @@ def run_single_koco_instance(args, instance: dict) -> dict:
     code_index = create_code_index(instance=instance, repository=repository)
 
     file_context = FileContext(repo=repository)
-    file_context.add_file(instance["target_path"], show_all_spans=False, add_extra=False)
-    target_context = file_context.get_context_file(instance["target_path"])
-    if target_context:
-        target_context.was_viewed = True
-        target_context.spans.append(
-            ContextSpan(
-                span_id=f"target_{instance['target_start_line']}_{instance['target_end_line']}",
-                start_line=max(1, instance["target_start_line"] - 5),
-                end_line=instance["target_end_line"] + 20,
-            )
-        )
 
     actions = build_actions(completion_model, repository, code_index)
     agent = ActionAgent(
         system_prompt=ASSISTANT_ROLE + ASSISTANT_GUIDELINES,
         actions=actions,
         completion=completion_model,
-        use_few_shots=False,
     )
 
     discriminator = AgentDiscriminator(
@@ -322,23 +230,26 @@ def run_single_koco_instance(args, instance: dict) -> dict:
         include_tree=True,
         include_node_suggestion=True,
     )
-    experience_path = Path(args.experience_path) if args.experience_path else Path(args.output_root) / "experience" / "koco_experience_bank.json"
-    experience_state_path = Path(args.output_root) / "experience" / safe_name(instance["instance_id"], 140) / f"{run_id}_experience.json"
-    select_agent = KocoExperienceSelector(
-        completion=completion_model,
-        instance=instance,
-        experience_path=experience_path,
-        persist_dir=experience_state_path,
-        top_k=args.experience_top_k,
-    )
-    old_experiences = select_agent.select_workflow(n=args.experience_top_k)
-    select_agent.persist(
-        {
-            "old_experiences": old_experiences,
-            "HET": {},
-            "trajectory": str(persist_path),
-        }
-    )
+    select_agent = None
+    old_experiences = None
+    if args.experience_path:
+        experience_path = Path(args.experience_path)
+        experience_state_path = Path(args.output_root) / "experience" / safe_name(instance["instance_id"], 140) / f"{run_id}_experience.json"
+        select_agent = KocoExperienceSelector(
+            completion=completion_model,
+            instance=instance,
+            experience_path=experience_path,
+            persist_dir=experience_state_path,
+            top_k=args.experience_top_k,
+        )
+        old_experiences = select_agent.select_workflow(n=args.experience_top_k)
+        select_agent.persist(
+            {
+                "old_experiences": old_experiences,
+                "HET": {},
+                "trajectory": str(persist_path),
+            }
+        )
     instructor = Instructor(
         completion=completion_model,
         system_prompt=INSTRUCTOR_ROLE + INSTRUCTION_GUIDELINES,
@@ -355,7 +266,6 @@ def run_single_koco_instance(args, instance: dict) -> dict:
         value_function=value_function,
         discriminator=discriminator,
         feedback_generator=feedback_generator,
-        metadata={"koco_stop_on_patch": True},
         max_finished_nodes=args.max_finished_nodes,
         max_iterations=args.max_iterations,
         max_expansions=args.max_expansions,
@@ -371,39 +281,26 @@ def run_single_koco_instance(args, instance: dict) -> dict:
     try:
         finished_node = search_tree.run_search(select_agent, old_experiences)
         search_tree.persist(str(persist_path))
-        valid_node, patch, completion, selection_error = extract_valid_koco_node(
-            search_tree, instance, finished_node
-        )
-        if valid_node:
-            status = "success"
-            logger.info(
-                "Selected KOCO node %s for %s",
-                valid_node.node_id,
-                instance["instance_id"],
-            )
+        if finished_node:
+            patch = finished_node.file_context.generate_git_patch()
+            if not patch.strip():
+                status = "no_completion"
+                error = "empty patch"
+            else:
+                ok, scope_error = validate_patch_scope(instance, patch)
+                if ok:
+                    completion = extract_completion_from_file_context(finished_node.file_context, instance)
+                    status = "success" if completion else "no_completion"
+                else:
+                    status = "invalid_patch_scope"
+                    error = scope_error
+                    logger.warning("%s: %s", instance["instance_id"], scope_error)
         else:
-            status = "no_completion"
-            error = selection_error
-            logger.warning("%s: %s", instance["instance_id"], selection_error)
-    except Exception as exc:
-        logger.exception("KOCO instance failed: %s", instance["instance_id"])
-        try:
             search_tree.persist(str(persist_path))
-        except Exception:
-            logger.exception("Failed to persist crashed KOCO search tree: %s", instance["instance_id"])
-        valid_node, patch, completion, selection_error = extract_valid_koco_node(search_tree, instance)
-        if valid_node:
-            status = "success"
-            error = f"search raised after valid patch: {exc}"
-            logger.info(
-                "Recovered valid KOCO node %s for %s after exception: %s",
-                valid_node.node_id,
-                instance["instance_id"],
-                exc,
-            )
-        else:
-            status = "error"
-            error = f"{exc}; {selection_error}"
+    except Exception as exc:
+        status = "error"
+        error = str(exc)
+        logger.exception("KOCO instance failed: %s", instance["instance_id"])
 
     model_label = args.output_label or model_label_from_model(args.model)
     output_file = upsert_output_record(
@@ -425,7 +322,6 @@ def run_single_koco_instance(args, instance: dict) -> dict:
         "trajectory": str(persist_path),
         "error": error,
     }
-    append_koco_experience(instance, result, experience_path)
     logger.info("KOCO result: %s", json.dumps(result, ensure_ascii=False))
     return result
 
@@ -617,7 +513,7 @@ def add_infer_args(parser):
     parser.add_argument("--experience-top-k", type=int, default=3)
     parser.add_argument("--workspace-dir", default="tmp/koco/workspaces")
     parser.add_argument("--output-root", default="tmp/koco")
-    parser.add_argument("--experience-path", default="", help="Experience bank JSON to read/write (default: <output-root>/experience/koco_experience_bank.json)")
+    parser.add_argument("--experience-path", default="", help="Optional experience bank JSON to use for inference")
     parser.add_argument("--reuse-workspace", action="store_true", help="Do not delete existing per-instance workspace before run")
     parser.add_argument("--force-parse", action="store_true", help="Regenerate KOCO input JSONL before running")
     parser.add_argument("--concurrency", type=int, default=1, help="Concurrent KOCO instances for infer")

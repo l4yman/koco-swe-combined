@@ -231,17 +231,9 @@ class ContextFile(BaseModel):
                             modified_end = current_line
 
                 if modified_start is not None:
-                    # Track modified lines without forcing a full AST parse.
-                    span_id = f"modified_{modified_start}_{modified_end}"
-                    if span_id not in self.span_ids:
-                        self.spans.append(
-                            ContextSpan(
-                                span_id=span_id,
-                                start_line=modified_start,
-                                end_line=modified_end,
-                            )
-                        )
-                    new_span_ids.add(span_id)
+                    # Add the modified line span to context
+                    span_ids = self.add_line_span(modified_start, modified_end)
+                    new_span_ids.update(span_ids)
 
         # Invalidate cached content
         self._cached_content = None
@@ -846,15 +838,6 @@ class ContextFile(BaseModel):
         """
         if self.show_all_spans:
             return True
-
-        for span in self.spans:
-            if (
-                span.start_line is not None
-                and span.end_line is not None
-                and span.start_line <= start_line
-                and end_line <= span.end_line
-            ):
-                return True
 
         if not self.module:
             return False
